@@ -361,7 +361,7 @@ class Generator:
 			self.genUnUsedKernel(file_stream)
 		
 		file_stream.write(
-			"\n__global__ void kernel(float*,float*,float*,int*,int*,int *,int);\n"
+			"\n__global__ void kernel(float*,float*,float*,int*,int*,int *,int,float *,int *);\n"
 			"float uniform(float start,float end)\n"
 			"{\n"
 			"\treturn start+(end-start)*rand()/RAND_MAX;\n"
@@ -409,14 +409,14 @@ class Generator:
 		
 	def genGlobalMemLD(self,file_stream,dst):
 		file_stream.write(
-			'\tld.global.f32	'+dst+', [%s_mem+0];\\n\\\n'
-			'\tadd.u64 %s_mem,%s_mem,%distance;\\n\\\n'
+			'\tld.global.f32	'+dst+', [%rgf+0];\\n\\\n'
+			'\tadd.u64 %rgf,%rgf,%g_distance;\\n\\\n'
 		)
 	
 	def genGlobalMemST(self,file_stream,src):
 		file_stream.write(
-			'\tst.global.f32  [%s_mem+0],'+src+';\\n\\\n'
-			'\tadd.u64 %s_mem,%s_mem,%distance;\\n\\\n'
+			'\tst.global.f32  [%rgf+0],'+src+';\\n\\\n'
+			'\tadd.u64 %rgf,%rgf,%g_distance;\\n\\\n'
 		)
 		
 	def genGlobalMemLD_int(self,file_stream,dst):
@@ -468,14 +468,15 @@ class Generator:
 	def declareFloatP(self,file_stream):
 		file_stream.write(
 			"\t//declare variables\n"
-			"\tint N=64,size=0,loop=0;\n\n"
+			"\tint N=64,size=0,loop=0,globalN=1024*1024*16;\n\n"
 			"\t//initialize the variables\n"
 			"\tN=gridx*gridy*gridz*bx*by*bz;\n"
 			"\tloop="+str(self.loop)+";\n\n"
 			"\tN=gridx*gridy*gridz*bx*by*bz*"+str(self.loop+1)+";\n"
 			"\tsize=(N)*sizeof(float);\n"
+			"\globalspace=(globalN)*sizeof(float);\n"
 			"\t//declare the float pointer variables\n"
-			"\tfloat * f0,*fd0,*f1,*fd1,*f2,*fd2;\n"
+			"\tfloat * f0,*fd0,*f1,*fd1,*f2,*fd2,*gf,*gf0;\n"
 		)
 	
 	def initFloatP(self,file_stream):
@@ -490,12 +491,24 @@ class Generator:
 				"\tf"+i+"[i]=uniform(1,10000);\n"
 				"\tcudaMemcpy(fd"+i+",f"+i+",size,cudaMemcpyHostToDevice);\n\n"
 			)
+			
+	def initFloatInGlobalMem(self,file_stream):   ##generate global memory space for float
+			file_stream.write(
+				"\t//global memory declare(float)\n"
+				"\tgf"+"=(float*)malloc(globalspace);\n"
+				"\tmemset(gf,0,globalspace);\n"
+            	"\tcudaMalloc((void**)&gf0"+",globalspace);\n"
+				"\tfor(int i=0;i<globalN;i++)\n"
+				"\t\tgf"+"[i]=uniform(1,10000);\n"
+				"\tcudaMemcpy(gf0,gf,globalspace,cudaMemcpyHostToDevice);\n\n"
+			)
 
 	def declareIntP(self,file_stream):
 		file_stream.write(
 			"\t//declare the int pointer variables\n"
-			"\tint * d0,*dd0,*d1,*dd1,*d2,*dd2;\n"
+			"\tint * d0,*dd0,*d1,*dd1,*d2,*dd2,*gd,*gd0;\n"
 			"\tsize=(N)*sizeof(int);\n\n"
+			"\globalspace=(globalN)*sizeof(int);\n"
 		)
 	
 	def initIntP(self,file_stream):
@@ -512,9 +525,20 @@ class Generator:
 			)
 		#file_stream.flush()
 
+	def initIntInGlobalMem(self,file_stream):   ##generate global memory space for int
+			file_stream.write(
+				"\t//global memory declare(int)\n"
+				"\tgd=(float*)malloc(globalspace);\n"
+				"\tmemset(gd,0,globalspace);\n"
+            	"\tcudaMalloc((void**)&gd0,globalspace);\n"
+				"\tfor(int i=0;i<globalN;i++)\n"
+				"\t\tgd[i]=uniform(1,10000);\n"
+				"\tcudaMemcpy(gd0,gd,globalspace,cudaMemcpyHostToDevice);\n\n"
+			)	
+		
 	def callKernel(self,file_stream):
 		file_stream.write(
-			"\tkernel<<<gridx*gridy,bx*by*bz>>>(fd0,fd1,fd2,dd0,dd1,dd2,loop);\n\n"
+			"\tkernel<<<gridx*gridy,bx*by*bz>>>(fd0,fd1,fd2,dd0,dd1,dd2,loop,gf0,gd0);\n\n"
 		)
 	
 	def printResult(self,file_stream):
@@ -530,7 +554,7 @@ class Generator:
 	
 	def genKernel(self,file_stream):
 		
-		file_stream.write('\n__global__ void kernel(float* f0,float* f1,float* f2,int *d0,int *d1,int *d2,int loop)\n'
+		file_stream.write('\n__global__ void kernel(float* f0,float* f1,float* f2,int *d0,int *d1,int *d2,int loop,float* gf,int* gd)\n'
 				'{\n'
 		)
 		file_stream.write(
@@ -583,10 +607,13 @@ class Generator:
 				'\t.reg .f32	%f_<3>;\\n\\\n'							#float regs
 				'\t.reg .s32	%d_<3>;\\n\\\n'							#int regs
 				'\t.reg .u64	%offset;\\n\\\n'						#offset
+				'\t.reg .u64	%g_distance;\\n\\\n'					
 				'\t.reg .u32	%loop;\\n\\\n'							#loop number
 				'\t.reg .u32	%pass;\\n\\\n'							#pass
 				'\t.reg .u64	%distance;\\n\\\n'							#pass
 				'\t.reg .u64	%distance_mem;\\n\\\n'							#pass
+				'\t.reg .u64	%gfp;\\n\\\n'							#pass
+				'\t.reg .u64	%gdp;\\n\\\n'							#pass
 				'\t.reg .u32	%counter;");\n'							#loop counter			
 		)
 		#file_stream.flush()
@@ -595,6 +622,8 @@ class Generator:
 		file_stream.write(
 			'\tasm volatile(".reg .u32	%rd<'+str(self.d_alu+self.d_mad+1)+'>;\\n\\\n'#int regs   Zhibin changes. +1 at the end
 				'\t.reg .f32	%rf<'+str(self.f_alu+self.f_sfu+self.f_mad+1)+'>;\\n\\\n' #float regs   Zhibin changes. +1 at the end
+				'\t.reg .f32	%rgf<32>;\\n\\\n'
+				'\t.reg .u32	%rgd<32>;\\n\\\n'
 				'\t.reg .b32	%rb<'+str(self.b_alu)+'>;\\n\\\n'						#byte regs
                                 '\t.reg .f64    %rdouble<'+str(self.f_mad)+'>;\\n\\\n'
 				'\t.reg .f64	%rmadf<3>;\\n\\\n'											#3td float op regs
@@ -604,6 +633,7 @@ class Generator:
 				'\tmov .b32	%ropb1,'+str(random.randint(10,1000))+';\\n\\\n'											#3td int op regs
 				'\tmov .u64	%distance,'+str(tot_size)+';\\n\\\n'											#3td int op regs
 				'\tmov .u64	%distance_mem,'+'262144'+';\\n\\\n'
+				'\tmov .u64	%g_distance,2048;\\n\\\n'
 				'\tmov .s32	%ropd3,'+str(random.randint(10,10000))+';\\n\\\n'											#3td int op regs
 				'\tmov .f64	%rmadf1,'+str(random.uniform(1,100))+';\\n\\\n'											#3td float op regs
                                 '\tmov .f64     %rmadf2,'+str(random.uniform(1,100))+';\\n\\\n'
@@ -671,7 +701,7 @@ class Generator:
 		file_stream.write('\t// instruction mix\n')
 		file_stream.write('\tasm volatile("mov.u32 %pass,0;\\n\\\n')
 		while (self.notCompleteComputeInsn(n_falu,n_fsfu,n_fmad,n_dalu,n_dmad,n_balu)):
-			n=random.randint(0,8);
+			n=random.randint(0,7);
 			#set shared memory load isntructions	
 			if sm_flag==1 and n_st_sm>0 and n_ld_sm<self.ld_shd and (n_sm_d==self.sm_distance or self.sm_distance==0):
 				self.genSharedMemLD(file_stream,'%rf'+str(random.randint(0,self.n_f-1)));
@@ -682,17 +712,17 @@ class Generator:
 			if n==7 and n_fmem<self.f_mem:
 				SorL_f=random.randint(0,1)
 				if SorL_f==0:
-					self.genGlobalMemLD(file_stream,'%rf'+str(random.randint(0,self.f_alu+self.f_sfu+self.f_mad)));
+					self.genGlobalMemLD(file_stream,'%rgf'+str(random.randint(0,31)));
 				else:
-					self.genGlobalMemST(file_stream,'%rf'+str(random.randint(0,self.f_alu+self.f_sfu+self.f_mad)));
+					self.genGlobalMemST(file_stream,'%rgf'+str(random.randint(0,31)));
 				n_fmem+=1
-			if n==8 and n_dmem<self.d_mem:
-				SorL_f=random.randint(0,1)
-				if SorL_f==0:
-					self.genGlobalMemLD(file_stream,'%rd'+str(random.randint(0,self.d_alu+self.d_mad)));
-				else:
-					self.genGlobalMemST(file_stream,'%rd'+str(random.randint(0,self.d_alu+self.d_mad)));
-				n_dmem+=1
+		#	if n==8 and n_dmem<self.d_mem:
+		#		SorL_f=random.randint(0,1)
+		#		if SorL_f==0:
+		#			self.genGlobalMemLD(file_stream,'%rd'+str(random.randint(0,self.d_alu+self.d_mad)));
+		#		else:
+		#			self.genGlobalMemST(file_stream,'%rd'+str(random.randint(0,self.d_alu+self.d_mad)));
+		#		n_dmem+=1
 			#n==0: set float alu instructions
 			if n==0 and n_falu<self.f_alu:
 				instruction.setInsn(f_alu_list[random.randint(0,len(f_alu_list)-1)],'float','alu',str(self.n_f))
@@ -805,6 +835,14 @@ class Generator:
 					'\n\tasm volatile("ld.param.u64	%rp'+t+i+', [__cudaparm__Z6kernelPfS_S_PiS0_S0_i_'+t+i+'];\\n\\\n'
 					'\tadd.u64	%rd'+t+i+',%rp'+t+i+',%offset;");\n'
 				)
+		file_stream.write(
+			'\n\tasm volatile("ld.param.u64	%gfp, [__cudaparm__Z6kernelPfS_S_PiS0_S0_i_gf];\\n\\\n'
+			'\tadd.u64	%gfp,%gfp,%offset;");\n'
+		)
+		file_stream.write(
+			'\n\tasm volatile("ld.param.u64	%gdp, [__cudaparm__Z6kernelPfS_S_PiS0_S0_i_gd];\\n\\\n'
+			'\tadd.u64	%gdp,%gdp,%offset;");\n'
+		)
 		file_stream.write('\t\n')
 
 	######################################################################################
@@ -866,8 +904,10 @@ class Generator:
 		self.genHead(out)		#generate header 
 		self.declareFloatP(out)	#declare Float pointer
 		self.initFloatP(out)	#initialize the Float pointer
+		self.initFloatInGlobalMem(out)
 		self.declareIntP(out)	#declare Int Pointer
 		self.initIntP(out)		#initialize the Int pointer
+		self.initIntInGlobalMem(out)
 		self.callKernel(out)	#call the kernel
 		self.printResult(out)	#print computing results
 		self.genKernel(out)
