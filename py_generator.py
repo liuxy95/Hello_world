@@ -209,6 +209,7 @@ class Generator:
 		self.loop=0;
 		#seed
 		self.seed=0;
+		self.strip=0;
 		
 		#mid results
 		self.n_regs=10;
@@ -235,7 +236,7 @@ class Generator:
 		print "\t--add,--sub,--sin,--mad,--mul,--div,--abs,--lg,--sqrt:instruction mix"
 
 	def getParameter(self):
-		arg_names=['help','fname=','bbtype=','gridDim=','blockDim=','bbsize=','add=','sub=','mul=','div=','sqrt=','lg=','sin=','mad=','mov=','abs=','ld_gl=','st_gl=','loop=','seed=','num_float=','num_int=','num_byte=','float_alu=','float_sfu=','float_mad=','int_alu=','int_mad=','byte_alu=','reg_distance=','const_mem=','shared_mem=','sm_distance=','int_mem=','float_mem='];
+		arg_names=['help','fname=','bbtype=','gridDim=','blockDim=','bbsize=','add=','sub=','mul=','div=','sqrt=','lg=','sin=','mad=','mov=','abs=','ld_gl=','st_gl=','loop=','seed=','num_float=','num_int=','num_byte=','float_alu=','float_sfu=','float_mad=','int_alu=','int_mad=','byte_alu=','reg_distance=','const_mem=','shared_mem=','sm_distance=','int_mem=','float_mem=','strip='];
 		try:
 			opts, args = getopt.getopt(sys.argv[1:], 'hf:', arg_names)
 		except getopt.GetoptError, err:
@@ -318,6 +319,8 @@ class Generator:
 				self.f_mem=float(e)
 			if(o=='--int_mem'):
 				self.d_mem=float(e)
+			if(o=='--strip'):
+				self.strip=int(e)
 
 		self.n_inst = self.bbtype * self.bbsize;
 		tmp_sum = self.f_alu + self.f_sfu + self.f_mad + self.d_alu + self.d_mad + self.b_alu+self.f_mem+self.d_mem;
@@ -409,14 +412,14 @@ class Generator:
 		
 	def genGlobalMemLD(self,file_stream,dst):
 		file_stream.write(
-			'\tld.global.f32	'+dst+', [%rgf+0];\\n\\\n'
-			'\tadd.u64 %rgf,%rgf,%g_distance;\\n\\\n'
+			'\tld.global.f32	'+dst+', [%gfp+0];\\n\\\n'
+			'\tadd.u64 %gfp,%gfp,%g_distance;\\n\\\n'
 		)
 	
 	def genGlobalMemST(self,file_stream,src):
 		file_stream.write(
-			'\tst.global.f32  [%rgf+0],'+src+';\\n\\\n'
-			'\tadd.u64 %rgf,%rgf,%g_distance;\\n\\\n'
+			'\tst.global.f32  [%gfp+0],'+src+';\\n\\\n'
+			'\tadd.u64 %gfp,%gfp,%g_distance;\\n\\\n'
 		)
 		
 	def genGlobalMemLD_int(self,file_stream,dst):
@@ -468,13 +471,13 @@ class Generator:
 	def declareFloatP(self,file_stream):
 		file_stream.write(
 			"\t//declare variables\n"
-			"\tint N=64,size=0,loop=0,globalN=1024*1024*16;\n\n"
+			"\tint N=64,size=0,loop=0,globalN=1024*1024*128,globalspace;\n\n"
 			"\t//initialize the variables\n"
 			"\tN=gridx*gridy*gridz*bx*by*bz;\n"
 			"\tloop="+str(self.loop)+";\n\n"
 			"\tN=gridx*gridy*gridz*bx*by*bz*"+str(self.loop+1)+";\n"
 			"\tsize=(N)*sizeof(float);\n"
-			"\globalspace=(globalN)*sizeof(float);\n"
+			"\tglobalspace=(globalN)*sizeof(float);\n"
 			"\t//declare the float pointer variables\n"
 			"\tfloat * f0,*fd0,*f1,*fd1,*f2,*fd2,*gf,*gf0;\n"
 		)
@@ -508,7 +511,7 @@ class Generator:
 			"\t//declare the int pointer variables\n"
 			"\tint * d0,*dd0,*d1,*dd1,*d2,*dd2,*gd,*gd0;\n"
 			"\tsize=(N)*sizeof(int);\n\n"
-			"\globalspace=(globalN)*sizeof(int);\n"
+			"\tglobalspace=(globalN)*sizeof(int);\n"
 		)
 	
 	def initIntP(self,file_stream):
@@ -528,7 +531,7 @@ class Generator:
 	def initIntInGlobalMem(self,file_stream):   ##generate global memory space for int
 			file_stream.write(
 				"\t//global memory declare(int)\n"
-				"\tgd=(float*)malloc(globalspace);\n"
+				"\tgd=(int*)malloc(globalspace);\n"
 				"\tmemset(gd,0,globalspace);\n"
             	"\tcudaMalloc((void**)&gd0,globalspace);\n"
 				"\tfor(int i=0;i<globalN;i++)\n"
@@ -633,7 +636,7 @@ class Generator:
 				'\tmov .b32	%ropb1,'+str(random.randint(10,1000))+';\\n\\\n'											#3td int op regs
 				'\tmov .u64	%distance,'+str(tot_size)+';\\n\\\n'											#3td int op regs
 				'\tmov .u64	%distance_mem,'+'262144'+';\\n\\\n'
-				'\tmov .u64	%g_distance,2048;\\n\\\n'
+				'\tmov .u64	%g_distance,'+str(self.strip)+';\\n\\\n'
 				'\tmov .s32	%ropd3,'+str(random.randint(10,10000))+';\\n\\\n'											#3td int op regs
 				'\tmov .f64	%rmadf1,'+str(random.uniform(1,100))+';\\n\\\n'											#3td float op regs
                                 '\tmov .f64     %rmadf2,'+str(random.uniform(1,100))+';\\n\\\n'
@@ -645,7 +648,7 @@ class Generator:
 			self.genConstMem(file_stream)
 		file_stream.write(
 		"\t//get the loop number\n"
-		"\tasm volatile(\"ld.param.u32   %loop, [__cudaparm__Z6kernelPfS_S_PiS0_S0_i_loop];\");//loop\n\n"
+		"\tasm volatile(\"ld.param.u32   %loop, [_Z6kernelPfS_S_PiS0_S0_iS_S0__param_6];\");//loop\n\n"
 		)
 		#file_stream.flush();d':['mad.rn',3,
 		self.genParam(file_stream)
@@ -830,17 +833,18 @@ class Generator:
 		file_stream.write('\tasm volatile("mul.wide.u32	%offset,%rgtid,4;");//get the address offset\n')
 		for t in tt:
 			for i in tmp:
+				st = str(int(i)+3*(t=='f'))
 				file_stream.write(
 					'//'+t+i+' data\n'
-					'\n\tasm volatile("ld.param.u64	%rp'+t+i+', [__cudaparm__Z6kernelPfS_S_PiS0_S0_i_'+t+i+'];\\n\\\n'
+					'\n\tasm volatile("ld.param.u64	%rp'+t+i+', [_Z6kernelPfS_S_PiS0_S0_iS_S0__param_'+st+'];\\n\\\n'
 					'\tadd.u64	%rd'+t+i+',%rp'+t+i+',%offset;");\n'
 				)
 		file_stream.write(
-			'\n\tasm volatile("ld.param.u64	%gfp, [__cudaparm__Z6kernelPfS_S_PiS0_S0_i_gf];\\n\\\n'
+			'\n\tasm volatile("ld.param.u64	%gfp, [_Z6kernelPfS_S_PiS0_S0_iS_S0__param_7];\\n\\\n'
 			'\tadd.u64	%gfp,%gfp,%offset;");\n'
 		)
 		file_stream.write(
-			'\n\tasm volatile("ld.param.u64	%gdp, [__cudaparm__Z6kernelPfS_S_PiS0_S0_i_gd];\\n\\\n'
+			'\n\tasm volatile("ld.param.u64	%gdp, [_Z6kernelPfS_S_PiS0_S0_iS_S0__param_8];\\n\\\n'
 			'\tadd.u64	%gdp,%gdp,%offset;");\n'
 		)
 		file_stream.write('\t\n')
